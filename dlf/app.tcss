@@ -1,0 +1,726 @@
+/* Domain Link Finder — terminal UI */
+
+Screen {
+    background: $background;
+    color: $foreground;
+}
+
+#topbar {
+    height: 1;
+    background: $panel;
+    color: $foreground;
+}
+
+#topbar-left {
+    width: 1fr;
+    height: 1;
+    content-align: left middle;
+    padding: 0 1;
+}
+
+#topbar-right {
+    width: auto;
+    height: 1;
+    content-align: right middle;
+    padding: 0 1;
+}
+
+#shell {
+    height: 1fr;
+    layout: horizontal;
+}
+
+#sidebar {
+    width: 21;
+    height: 1fr;
+    background: $panel;
+    border-right: solid $surface;
+    padding: 1;
+}
+
+#brand {
+    height: 3;
+    color: $primary;
+    text-style: bold;
+    content-align: left middle;
+    margin-bottom: 0;
+}
+
+#brand-sub {
+    height: 1;
+    color: $text-muted;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+Button.nav.-style-default {
+    width: 100%;
+    height: 3;
+    min-width: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+    color: $foreground;
+    content-align: left middle;
+    text-align: left;
+    padding: 0 1;
+    text-style: bold;
+}
+
+Button.nav.-style-default:hover {
+    background: $surface;
+    color: $primary;
+    border: none;
+}
+
+Button.nav.-style-default:focus {
+    background: $surface;
+    color: $primary;
+    border: none;
+}
+
+Button.nav.active.-style-default {
+    background: $primary;
+    color: $background;
+}
+
+Button.nav.active.-style-default:hover {
+    background: $primary-lighten-1;
+    color: $background;
+}
+
+#side-status {
+    height: auto;
+    margin-top: 1;
+    padding: 1;
+    border-top: solid $surface;
+    color: $text-muted;
+}
+
+#side-tip {
+    dock: bottom;
+    height: auto;
+    color: $text-disabled;
+    padding: 1 0 0 0;
+}
+
+#main {
+    width: 1fr;
+    height: 1fr;
+}
+
+#views {
+    width: 1fr;
+    height: 1fr;
+}
+
+.view {
+    width: 100%;
+    height: 100%;
+    padding: 1 2;
+    transition: opacity 0.18s in_out_cubic;
+}
+
+/* ---------- Home ---------- */
+
+#view-home {
+    align: center middle;
+}
+
+.home-panel {
+    width: 82%;
+    max-width: 112;
+    height: auto;
+    padding: 1 2;
+}
+
+.home-title {
+    height: auto;
+    text-align: center;
+    margin-top: 1;
+}
+
+.home-subtitle {
+    height: auto;
+    text-align: center;
+    color: $text-muted;
+    margin-bottom: 2;
+}
+
+.field {
+    height: auto;
+    margin-bottom: 1;
+    layout: horizontal;
+}
+
+.field-label {
+    width: 24;
+    height: 3;
+    content-align: left middle;
+    color: $text-muted;
+    text-style: bold;
+}
+
+.field.compact {
+    width: 1fr;
+    height: auto;
+    margin-right: 1;
+    layout: vertical;
+}
+
+.field.compact .field-label {
+    width: 100%;
+    height: 1;
+    color: $text-muted;
+}
+
+.field.compact Input,
+.field.compact Select {
+    width: 100%;
+}
+
+.field-row {
+    height: auto;
+    layout: horizontal;
+    margin-bottom: 1;
+}
+
+Input {
+    width: 1fr;
+    height: 3;
+    border: tall $surface;
+    background: $panel;
+    color: $foreground;
+    padding: 0 1;
+    scrollbar-size-horizontal: 0;
+}
+
+Input:focus {
+    border: tall $primary;
+    background: $surface;
+}
+
+Input.-invalid {
+    border: tall $error;
+}
+
+Select {
+    width: 1fr;
+    height: auto;
+    border: none;
+    background: transparent;
+    padding: 0;
+}
+
+Select > SelectCurrent {
+    height: 3;
+    border: tall $surface;
+    background: $panel;
+    color: $foreground;
+    padding: 0 1;
+}
+
+Select:focus > SelectCurrent {
+    border: tall $primary;
+    background: $surface;
+}
+
+Switch {
+    height: 3;
+    margin-right: 1;
+}
+
+.toggle-row {
+    height: 3;
+    layout: horizontal;
+    align-vertical: middle;
+}
+
+.toggle-label {
+    width: auto;
+    height: 3;
+    content-align: left middle;
+    color: $text-muted;
+    margin-right: 0;
+}
+
+.button-row {
+    height: auto;
+    layout: horizontal;
+    margin-top: 1;
+    align-vertical: middle;
+}
+
+Button {
+    min-width: 12;
+    margin-right: 1;
+    text-align: center;
+}
+
+Button.-style-default {
+    height: 3;
+    border: tall $surface;
+    background: $panel;
+    color: $foreground;
+    text-style: bold;
+}
+
+Button.-style-default:hover {
+    background: $surface;
+    border: tall $primary;
+    color: $primary;
+}
+
+Button.-style-default:focus {
+    border: tall $primary;
+}
+
+Screen Button.-style-default.-primary {
+    background: $primary;
+    border: tall $primary;
+    color: $background;
+}
+
+Screen Button.-style-default.-primary:hover {
+    background: $primary-lighten-1;
+    border: tall $primary-lighten-1;
+    color: $background;
+}
+
+Screen Button.-style-default.-success {
+    background: $success;
+    border: tall $success;
+    color: $background;
+}
+
+Screen Button.-style-default.-success:hover {
+    background: $success-lighten-1;
+    border: tall $success-lighten-1;
+    color: $background;
+}
+
+Screen Button.-style-default.-error {
+    background: $error;
+    border: tall $error;
+    color: $background;
+}
+
+Screen Button.-style-default.-error:hover {
+    background: $error-lighten-1;
+    border: tall $error-lighten-1;
+    color: $background;
+}
+
+Screen Button.-style-default.-warning {
+    background: $warning;
+    border: tall $warning;
+    color: $background;
+}
+
+#home-hint {
+    height: auto;
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#home-latest {
+    height: auto;
+    color: $secondary;
+    border-top: solid $surface;
+    padding-top: 1;
+    margin-top: 1;
+}
+
+/* ---------- Dashboard ---------- */
+
+.stats-row {
+    height: 7;
+    layout: horizontal;
+    margin-bottom: 1;
+}
+
+.stat-card {
+    width: 1fr;
+    height: 7;
+    margin-right: 1;
+    padding: 0 1;
+    background: $surface;
+    border: round $panel;
+}
+
+.stat-card:hover {
+    background: $panel;
+    border: round $primary;
+}
+
+.stat-title {
+    height: 1;
+    color: $text-muted;
+    text-style: bold;
+}
+
+.stat-value {
+    height: 3;
+    width: 1fr;
+    color: $primary;
+    text-style: bold;
+    overflow: hidden;
+}
+
+.stat-hint {
+    height: 1;
+    color: $text-muted;
+}
+
+.panels-row {
+    height: 12;
+    layout: horizontal;
+    margin-bottom: 1;
+}
+
+.panel {
+    width: 1fr;
+    height: 1fr;
+    margin-right: 1;
+    padding: 0 1;
+    background: $surface;
+    border: round $panel;
+}
+
+.panel:hover {
+    border: round $primary-darken-2;
+}
+
+.panel-title {
+    height: 1;
+    color: $text-muted;
+    text-style: bold;
+    margin-top: 0;
+}
+
+.progress-label {
+    height: 1;
+    color: $foreground;
+}
+
+ProgressBar {
+    height: 1;
+    margin-bottom: 1;
+}
+
+Sparkline {
+    height: 4;
+}
+
+Sparkline > .sparkline--max-color {
+    color: $secondary 55%;
+}
+
+Sparkline > .sparkline--min-color {
+    color: $secondary 20%;
+}
+
+.recent-row {
+    height: 14;
+}
+
+.issues-body {
+    height: 1fr;
+    color: $text-muted;
+}
+
+#recent-table {
+    height: 1fr;
+    scrollbar-size-horizontal: 0;
+}
+
+.recent-panel {
+    width: 3fr;
+}
+
+.issues-panel {
+    width: 2fr;
+    margin-right: 0;
+}
+
+/* ---------- Tables ---------- */
+
+DataTable {
+    height: 1fr;
+    background: $surface;
+    color: $foreground;
+}
+
+DataTable > .datatable--header {
+    background: $panel;
+    color: $primary;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $primary 35%;
+    color: $foreground;
+}
+
+DataTable > .datatable--hover {
+    background: $panel;
+}
+
+DataTable > .datatable--odd-row {
+    background: $surface;
+}
+
+DataTable > .datatable--even-row {
+    background: $background;
+}
+
+/* ---------- URLs + Links ---------- */
+
+#view-urls,
+#view-links,
+#view-logs {
+    layout: vertical;
+}
+
+.toolbar {
+    height: 3;
+    layout: horizontal;
+    margin-bottom: 1;
+    align-vertical: middle;
+}
+
+.toolbar Input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+.toolbar Select {
+    width: 24;
+    margin-right: 1;
+}
+
+.toolbar Checkbox {
+    height: 3;
+    margin-right: 1;
+    padding: 0 1;
+}
+
+.page-btn {
+    min-width: 8;
+    width: 8;
+    margin-right: 0;
+}
+
+.page-label {
+    width: 24;
+    height: 3;
+    content-align: center middle;
+    color: $text-muted;
+}
+
+#urls-body,
+#links-body {
+    height: 1fr;
+    layout: horizontal;
+}
+
+#urls-table {
+    width: 2fr;
+    height: 1fr;
+}
+
+#links-table {
+    width: 2fr;
+    height: 1fr;
+}
+
+.detail-panel {
+    width: 52;
+    height: 1fr;
+    margin-left: 1;
+    padding: 0 1;
+    background: $surface;
+    border: round $panel;
+}
+
+#url-detail-body,
+#link-detail-body {
+    height: 1fr;
+    color: $foreground;
+    overflow-y: auto;
+}
+
+.detail-actions {
+    height: 3;
+    layout: horizontal;
+}
+
+.detail-actions Button {
+    width: 1fr;
+    min-width: 8;
+    margin-right: 1;
+}
+
+.detail-actions Button:last-of-type {
+    margin-right: 0;
+}
+
+.host-bar {
+    height: 3;
+    layout: horizontal;
+    align-vertical: middle;
+    margin-bottom: 1;
+}
+
+.host-label {
+    width: 11;
+    height: 3;
+    content-align: left middle;
+    color: $text-muted;
+    text-style: bold;
+}
+
+#host-chips {
+    width: 1fr;
+    height: 3;
+    layout: horizontal;
+    overflow: hidden;
+}
+
+.chip {
+    height: 3;
+    min-width: 0;
+    width: auto;
+    margin-right: 1;
+    padding: 0 1;
+    background: $panel;
+    border: tall $panel;
+    color: $secondary;
+    text-style: none;
+}
+
+.chip:hover {
+    border: tall $secondary;
+    color: $secondary;
+}
+
+.chip.active {
+    background: $secondary;
+    border: tall $secondary;
+    color: $background;
+    text-style: bold;
+}
+
+#host-clear {
+    width: 12;
+    min-width: 12;
+    margin-right: 0;
+}
+
+.bulk-row {
+    margin-top: 1;
+}
+
+/* ---------- Logs ---------- */
+
+#view-logs .toolbar Select {
+    width: 18;
+}
+
+#view-logs .toolbar Input {
+    width: 1fr;
+}
+
+#logs {
+    height: 1fr;
+    background: $surface;
+    border: round $panel;
+    padding: 0 1;
+    color: $foreground;
+}
+
+/* ---------- Settings ---------- */
+
+#view-settings {
+    align-horizontal: center;
+}
+
+.settings-panel {
+    width: 88%;
+    max-width: 118;
+    height: auto;
+    padding: 0 2 1 2;
+    background: $surface;
+    border: round $panel;
+}
+
+.settings-panel .panel-title {
+    margin-top: 1;
+    color: $primary;
+    height: 1;
+}
+
+.settings-panel .field-label {
+    width: 27;
+}
+
+#settings-hint {
+    height: auto;
+    color: $text-muted;
+    margin-top: 1;
+}
+
+/* ---------- Footer / modal ---------- */
+
+#footerbar {
+    height: 1;
+    background: $panel;
+    color: $text-muted;
+    content-align: left middle;
+    padding: 0 1;
+}
+
+HelpScreen {
+    align: center middle;
+    background: $background 80%;
+}
+
+#dialog {
+    width: 86;
+    max-width: 96%;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+    background: $panel;
+    border: round $primary;
+}
+
+.dialog-title {
+    height: 1;
+    color: $primary;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.dialog-body {
+    height: auto;
+    color: $foreground;
+    margin-bottom: 1;
+}
+
+#help-close {
+    width: 100%;
+    min-width: 0;
+    margin-right: 0;
+}
+
+/* ---------- Scrollbars ---------- */
+
+* {
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+    scrollbar-background: $panel;
+    scrollbar-color: $primary 30%;
+    scrollbar-color-hover: $primary 60%;
+    scrollbar-color-active: $primary 80%;
+}

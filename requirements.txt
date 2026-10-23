@@ -1,0 +1,5 @@
+textual>=8.2,<9
+rich>=15,<16
+requests>=2.32,<3
+beautifulsoup4>=4.13,<5
+lxml>=6,<7
