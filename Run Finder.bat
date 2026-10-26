@@ -24,12 +24,5 @@ if errorlevel 1 (
     )
 )
 
-if defined WT_SESSION goto run
-where wt.exe >nul 2>nul
-if errorlevel 1 goto run
-start "" wt.exe -w 0 nt -d "%~dp0" cmd /k "chcp 65001>nul & ""%PY%"" run.py %*"
-exit /b 0
-
-:run
 "%PY%" run.py %*
 if errorlevel 1 pause

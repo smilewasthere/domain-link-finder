@@ -131,20 +131,20 @@ Button.nav.active.-style-default:hover {
     width: 82%;
     max-width: 112;
     height: auto;
-    padding: 1 2;
+    padding: 0 2;
 }
 
 .home-title {
     height: auto;
     text-align: center;
-    margin-top: 1;
+    margin-top: 0;
 }
 
 .home-subtitle {
     height: auto;
     text-align: center;
     color: $text-muted;
-    margin-bottom: 2;
+    margin-bottom: 1;
 }
 
 .field {
@@ -420,6 +420,14 @@ Sparkline > .sparkline--min-color {
     color: $secondary 20%;
 }
 
+.spark-note {
+    height: 4;
+    content-align: center middle;
+    color: $text-muted;
+    text-style: italic;
+    display: none;
+}
+
 .recent-row {
     height: 14;
 }
@@ -530,12 +538,16 @@ DataTable > .datatable--even-row {
 }
 
 #links-table {
-    width: 2fr;
+    width: 1fr;
     height: 1fr;
 }
 
+#urls-table {
+    width: 1fr;
+}
+
 .detail-panel {
-    width: 52;
+    width: 34;
     height: 1fr;
     margin-left: 1;
     padding: 0 1;
@@ -712,6 +724,254 @@ HelpScreen {
     width: 100%;
     min-width: 0;
     margin-right: 0;
+}
+
+/* ---------- Pattern chips / file types ---------- */
+
+.pattern-field {
+    align-vertical: top;
+}
+
+.pattern-editor {
+    width: 1fr;
+    height: auto;
+}
+
+.pattern-chips {
+    width: 100%;
+    height: auto;
+    min-height: 3;
+    layout: horizontal;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.pattern-entry {
+    width: 100%;
+    height: 3;
+    layout: horizontal;
+}
+
+.pattern-entry Input {
+    width: 1fr;
+}
+
+.pattern-chip {
+    height: 3;
+    margin-bottom: 0;
+    background: $surface;
+    border: tall $primary-darken-2;
+    color: $primary;
+}
+
+.pattern-chip:hover {
+    background: $primary;
+    border: tall $primary;
+    color: $background;
+}
+
+.mini-btn {
+    width: auto;
+    min-width: 7;
+    height: 3;
+    margin-right: 0;
+    padding: 0 1;
+}
+
+.extension-button {
+    width: 100%;
+    min-width: 0;
+    height: 3;
+    margin: 0;
+    border: tall $surface;
+    background: $panel;
+    color: $secondary;
+}
+
+.extension-button:hover {
+    border: tall $secondary;
+    color: $secondary;
+}
+
+.field-hint {
+    height: 1;
+    color: $text-disabled;
+    text-style: italic;
+}
+
+/* ---------- Live view ---------- */
+
+.live-toolbar {
+    height: 3;
+}
+
+.live-toolbar .panel-title {
+    width: 22;
+    height: 3;
+    content-align: left middle;
+    color: $primary;
+}
+
+.live-toolbar #live-count {
+    width: 1fr;
+}
+
+#live-feed {
+    height: 1fr;
+    padding: 0 1;
+    background: $surface;
+    border: round $panel;
+}
+
+.live-empty {
+    height: auto;
+    padding: 2 2;
+    color: $text-disabled;
+    text-style: italic;
+}
+
+.live-card {
+    width: 100%;
+    height: 3;
+    margin-bottom: 1;
+    padding: 0 1;
+    background: $panel;
+    border: none;
+    transition: background 250ms;
+}
+
+.live-card:hover {
+    background: $surface;
+}
+
+.live-badge {
+    width: 12;
+    height: 3;
+    content-align: center middle;
+    text-style: bold;
+    background: $surface;
+    color: $text-muted;
+}
+
+.live-file {
+    width: 1fr;
+    height: 3;
+    content-align: left middle;
+    color: $foreground;
+    text-style: bold;
+    padding-left: 1;
+}
+
+.live-meta {
+    width: 54;
+    height: 3;
+    content-align: right middle;
+    color: $text-muted;
+    overflow: hidden;
+}
+
+.live-card.state-gathered .live-badge,
+.live-card.state-queued .live-badge,
+.live-card.state-unverified .live-badge {
+    background: $surface;
+    color: $text-muted;
+}
+
+.live-card.state-verifying .live-badge {
+    background: $secondary;
+    color: $background;
+}
+
+.live-card.state-ok .live-badge {
+    background: $success;
+    color: $background;
+}
+
+.live-card.state-blocked .live-badge,
+.live-card.state-missing .live-badge {
+    background: $warning;
+    color: $background;
+}
+
+.live-card.state-error .live-badge {
+    background: $error;
+    color: $background;
+}
+
+.live-card.live-new {
+    background: $primary-darken-3;
+}
+
+/* ---------- Extension modal ---------- */
+
+ExtensionScreen {
+    align: center middle;
+    background: $background 80%;
+}
+
+#dialog.ext-dialog {
+    width: 100;
+    max-width: 96%;
+    height: auto;
+    max-height: 92%;
+    padding: 1 2;
+    background: $panel;
+    border: round $primary;
+}
+
+.dialog-subtitle {
+    height: auto;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#ext-catalog {
+    height: 25;
+    margin-bottom: 1;
+    padding: 0 1;
+    background: $surface;
+    border: round $panel;
+}
+
+.ext-category {
+    height: 1;
+    color: $primary;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.ext-row {
+    height: auto;
+    layout: grid;
+    grid-size: 5;
+    grid-columns: 1fr;
+    margin-bottom: 1;
+}
+
+.ext-check {
+    height: 1;
+    min-width: 0;
+    background: transparent;
+}
+
+.ext-check.-style-default {
+    background: transparent;
+}
+
+.ext-custom-row {
+    height: 3;
+    layout: horizontal;
+}
+
+.ext-custom-row Input {
+    width: 1fr;
+}
+
+.dialog-hint {
+    height: auto;
+    color: $text-disabled;
+    text-style: italic;
+    margin-top: 1;
 }
 
 /* ---------- Scrollbars ---------- */

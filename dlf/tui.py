@@ -9,10 +9,11 @@ from collections import deque
 from pathlib import Path
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Container, Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -33,7 +34,7 @@ from textual.widgets import (
     Switch,
 )
 
-from .engine import Config, Engine
+from .engine import Config, Engine, normalize_extensions
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.json"
@@ -73,6 +74,24 @@ THEME_OPTIONS = [
 ]
 
 ANIMATION_OPTIONS = [("Full", "full"), ("Basic", "basic"), ("Off", "none")]
+
+MATCH_MODE_OPTIONS = [
+    ("Patterns only", "patterns"),
+    ("Patterns + file types", "both"),
+    ("File types only", "extensions"),
+]
+
+EXTENSION_CATALOG = [
+    ("Video", ["mkv", "mp4", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "mpg", "mpeg"]),
+    ("Audio", ["mp3", "wav", "flac", "aac", "m4a", "ogg", "opus", "wma"]),
+    ("Archives", ["zip", "rar", "7z", "tar", "gz", "tar.gz", "bz2", "xz", "iso"]),
+    ("Documents", ["pdf", "epub", "mobi", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"]),
+    ("Images", ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "avif", "heic"]),
+    ("Apps & data", ["apk", "exe", "msi", "dmg", "pkg", "deb", "rpm", "json", "xml", "csv", "sql", "db"]),
+]
+CATALOG_EXTENSIONS = {
+    extension for _, extensions in EXTENSION_CATALOG for extension in extensions
+}
 
 STATUS_STYLES = {
     "queued": "muted", "fetching": "secondary", "scanned": "success",
@@ -162,6 +181,216 @@ class StatCard(Vertical):
         self.post_message(self.Clicked(self.card_key))
 
 
+class PatternChipEditor(Vertical):
+    def __init__(self, patterns: list[str] | None = None) -> None:
+        super().__init__(id="patterns-editor", classes="pattern-editor")
+        self._patterns = [str(item).strip() for item in (patterns or []) if str(item).strip()]
+        self._render_generation = 0
+
+    def compose(self) -> ComposeResult:
+        yield Horizontal(id="pattern-chips", classes="pattern-chips")
+        with Horizontal(classes="pattern-entry"):
+            yield Input(
+                placeholder="*.example.com  |  https://cdn.example.com/*  |  re:film-\\d+",
+                id="pattern-input",
+            )
+            yield Button("Add", id="pattern-add", classes="mini-btn")
+
+    def on_mount(self) -> None:
+        self._render_chips()
+
+    def patterns(self) -> list[str]:
+        return list(self._patterns)
+
+    def set_patterns(self, patterns: list[str]) -> None:
+        self._patterns = [str(item).strip() for item in patterns if str(item).strip()]
+        self._render_chips()
+
+    def _render_chips(self) -> None:
+        container = self.query_one("#pattern-chips", Horizontal)
+        container.remove_children()
+        self._render_generation += 1
+        for index, pattern in enumerate(self._patterns):
+            label = pattern if len(pattern) <= 34 else pattern[:31] + "..."
+            container.mount(Button(
+                f"{label}  x",
+                id=f"pattern-chip-{self._render_generation}-{index}",
+                classes="chip pattern-chip",
+                tooltip="Remove this pattern",
+            ))
+
+    def _add_pattern(self) -> None:
+        field = self.query_one("#pattern-input", Input)
+        added = False
+        for part in field.value.replace("\n", ",").split(","):
+            pattern = part.strip()
+            if pattern and pattern not in self._patterns:
+                self._patterns.append(pattern)
+                added = True
+        field.value = ""
+        if added:
+            self._render_chips()
+
+    @on(Input.Submitted, "#pattern-input")
+    def _pattern_submitted(self) -> None:
+        self._add_pattern()
+
+    @on(Button.Pressed)
+    def _pattern_button(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id == "pattern-add":
+            self._add_pattern()
+            event.stop()
+        elif button_id.startswith("pattern-chip-"):
+            try:
+                index = int(button_id.rsplit("-", 1)[1])
+            except ValueError:
+                return
+            if 0 <= index < len(self._patterns):
+                self._patterns.pop(index)
+                self._render_chips()
+            event.stop()
+
+
+class ExtensionCheckbox(Checkbox):
+    @property
+    def _button(self) -> Content:
+        button_style = self.get_visual_style("toggle--button")
+        marker = "x" if self.value else " "
+        return Content.assemble((f"[{marker}]", button_style))
+
+
+class ExtensionScreen(ModalScreen):
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, selected: list[str] | None = None) -> None:
+        super().__init__()
+        normalized = normalize_extensions(selected or [])
+        self._selected = set(normalized)
+        self._custom_selected = [
+            extension for extension in normalized if extension not in CATALOG_EXTENSIONS
+        ]
+        self._checks: dict[str, ExtensionCheckbox] = {}
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog", classes="ext-dialog"):
+            yield Static("FILE TYPE FILTER", classes="dialog-title")
+            yield Static(
+                "Pick any number of extensions. The filter is case-insensitive and "
+                "supports compound names such as tar.gz.",
+                classes="dialog-subtitle",
+            )
+            with VerticalScroll(id="ext-catalog"):
+                for category, extensions in EXTENSION_CATALOG:
+                    yield Static(category.upper(), classes="ext-category")
+                    with Horizontal(classes="ext-row"):
+                        for extension in extensions:
+                            checkbox = ExtensionCheckbox(
+                                f".{extension}",
+                                value=extension in self._selected,
+                                compact=True,
+                                classes="ext-check",
+                            )
+                            self._checks[extension] = checkbox
+                            yield checkbox
+            with Horizontal(classes="ext-custom-row"):
+                yield Input(
+                    value=", ".join(self._custom_selected),
+                    placeholder="Custom types, e.g. psd, tar.gz",
+                    id="ext-custom",
+                )
+                yield Button("Apply", id="ext-apply", variant="primary")
+                yield Button("Clear", id="ext-clear")
+                yield Button("Cancel", id="ext-cancel")
+            yield Static(
+                "Leave every box unchecked to allow any file type.",
+                classes="dialog-hint",
+            )
+
+    def on_mount(self) -> None:
+        for button in self.query(Button):
+            button.styles.line_pad = 0
+        self.query_one("#ext-custom", Input).focus()
+
+    def _collect(self) -> list[str]:
+        selected = [
+            extension for extension, checkbox in self._checks.items()
+            if checkbox.value
+        ]
+        selected.extend(normalize_extensions([
+            self.query_one("#ext-custom", Input).value,
+        ]))
+        return normalize_extensions(selected)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed)
+    def _extension_button(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id == "ext-apply":
+            self.dismiss(self._collect())
+        elif button_id == "ext-clear":
+            for checkbox in self._checks.values():
+                checkbox.value = False
+            self.query_one("#ext-custom", Input).value = ""
+        elif button_id == "ext-cancel":
+            self.dismiss(None)
+
+
+class LiveFindCard(Horizontal):
+    def __init__(self, event: dict, animate: bool = True) -> None:
+        super().__init__(id=f"live-{event.get('seq', 0)}", classes="live-card")
+        self.event = dict(event)
+        self.animate = animate
+        self._settle_timer = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("", classes="live-badge")
+        yield Static("", classes="live-file")
+        yield Static("", classes="live-meta")
+
+    def on_mount(self) -> None:
+        self.update_event(self.event, animate=self.animate)
+
+    def update_event(self, event: dict, animate: bool = False) -> None:
+        self.event.update(event)
+        status = str(event.get("status") or "gathered")
+        for old in list(self.classes):
+            if old.startswith("state-"):
+                self.remove_class(old)
+        self.add_class(f"state-{status}")
+        badge = self.query_one(".live-badge", Static)
+        filename = self.query_one(".live-file", Static)
+        meta = self.query_one(".live-meta", Static)
+        badge.update(status.upper())
+        filename.update((event.get("filename") or event.get("url") or "")[:96])
+        http = event.get("http")
+        parts = [
+            (event.get("host") or "")[:42],
+            str(event.get("time") or ""),
+            f"HTTP {http}" if http else "",
+            (event.get("error") or "")[:64],
+        ]
+        meta.update("  |  ".join(part for part in parts if part))
+        if animate and self.animate:
+            self.styles.opacity = 0.0
+            self.add_class("live-new")
+            self.call_after_refresh(self._fade_in)
+
+    def _fade_in(self) -> None:
+        try:
+            self.styles.opacity = 1.0
+        except Exception:
+            pass
+        if self._settle_timer is not None:
+            self._settle_timer.stop()
+        self._settle_timer = self.set_timer(0.65, self._settle)
+
+    def _settle(self) -> None:
+        self.remove_class("live-new")
+
+
 class HelpScreen(ModalScreen):
     BINDINGS = [Binding("escape", "dismiss", "Close")]
 
@@ -171,13 +400,16 @@ class HelpScreen(ModalScreen):
             yield Static(
                 Text.from_markup(
                     "[b]F1[/b] Home   [b]F2[/b] Dashboard   [b]F3[/b] URLs   "
-                    "[b]F4[/b] Links   [b]F5[/b] Logs   [b]F6[/b] Settings\n"
+                    "[b]F4[/b] Links   [b]F5[/b] Logs   [b]F6[/b] Settings   "
+                    "[b]F7[/b] Live\n"
                     "[b]Ctrl+P[/b] Command palette   [b]Ctrl+Q[/b] Quit   "
                     "[b]F9[/b] Export CSV\n\n"
                     "[b]Home[/b]\n"
-                    "Set the site URL and one or more host patterns, then Start.\n"
+                    "Set the site URL and add one or more match patterns as chips. "
                     "Patterns support wildcards (`*.abrtech.top`), full-URL globs, "
-                    "and `re:` regular expressions.\n\n"
+                    "and `re:` regular expressions.\n"
+                    "Use File types to filter by extension, then choose whether matching "
+                    "requires patterns, file types, or both.\n\n"
                     "[b]Dashboard[/b]\n"
                     "Click any stat card to jump to the filtered URLs or Links view.\n"
                     "Pause and Resume affect both crawling and verification. Stop is graceful "
@@ -191,6 +423,9 @@ class HelpScreen(ModalScreen):
                     "the table.\n\n"
                     "[b]Logs[/b]\n"
                     "Live, color-coded log tail. Every line is also stored in run.log.\n\n"
+                    "[b]Live[/b]\n"
+                    "Animated feed of matches and verification state changes. "
+                    "Pause the feed to inspect a busy run without losing results.\n\n"
                     "[b]Settings[/b]\n"
                     "Change theme, animations, page size, headers, proxy and extra seeds.\n"
                     "Settings are saved to config.json for future runs."
@@ -220,6 +455,7 @@ class DLFApp(App):
         Binding("f4", "view_links", "Links", show=False),
         Binding("f5", "view_logs", "Logs", show=False),
         Binding("f6", "view_settings", "Settings", show=False),
+        Binding("f7", "view_live", "Live", show=False),
         Binding("f9", "export_csv", "Export", show=False),
         Binding("ctrl+p", "command_palette", "Palette"),
         Binding("ctrl+q", "quit", "Quit"),
@@ -276,6 +512,15 @@ class DLFApp(App):
         self._last_rate_sample = 0.0
         self._recent_signature: tuple = ()
         self._issues_signature: tuple | None = None
+        self._extensions = list(self.initial_config.extensions)
+        self._match_mode = self.initial_config.match_mode
+        self._last_link_event_seq = 0
+        self._last_live_refresh = 0.0
+        self._live_cards: dict[str, LiveFindCard] = {}
+        self._live_paused = False
+        self._live_seeded = False
+        self._live_empty_seq = 0
+        self._spark_ready = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
@@ -287,6 +532,7 @@ class DLFApp(App):
                 yield Static("TERMINAL CRAWLER", id="brand-sub")
                 yield Button("Home", id="nav-home", classes="nav active")
                 yield Button("Dashboard", id="nav-dash", classes="nav")
+                yield Button("Live", id="nav-live", classes="nav")
                 yield Button("URLs", id="nav-urls", classes="nav")
                 yield Button("Links", id="nav-links", classes="nav")
                 yield Button("Logs", id="nav-logs", classes="nav")
@@ -321,25 +567,45 @@ class DLFApp(App):
                                         placeholder="https://www.example.com/",
                                         id="inp-url",
                                     )
-                                with Horizontal(classes="field"):
+                                with Horizontal(classes="field pattern-field"):
                                     yield Label("Match patterns", classes="field-label")
-                                    yield Input(
-                                        value=", ".join(self.initial_config.patterns),
-                                        placeholder="*.abrtech.top, *.example.net",
-                                        id="inp-patterns",
-                                    )
+                                    yield PatternChipEditor(self.initial_config.patterns)
+                                with Horizontal(classes="field-row filter-row"):
+                                    with Vertical(classes="field compact"):
+                                        yield Label("Match mode", classes="field-label")
+                                        yield Select(
+                                            MATCH_MODE_OPTIONS,
+                                            value=self._match_mode,
+                                            allow_blank=False,
+                                            id="sel-match-mode",
+                                        )
+                                    with Vertical(classes="field compact"):
+                                        yield Label("File types", classes="field-label")
+                                        yield Button(
+                                            self._extension_label(),
+                                            id="btn-extensions",
+                                            classes="extension-button",
+                                        )
+                                        yield Static(
+                                            "Any file type" if not self._extensions else
+                                            ", ".join(f".{ext}" for ext in self._extensions[:4]),
+                                            id="ext-summary",
+                                            classes="field-hint",
+                                        )
                                 with Horizontal(classes="field-row"):
                                     with Vertical(classes="field compact"):
-                                        yield Label("Max pages (0 = all)", classes="field-label")
+                                        yield Label("Max pages", classes="field-label")
                                         yield Input(
                                             value=str(self.initial_config.max_pages),
                                             id="inp-max-pages", type="integer",
+                                            tooltip="0 means no page limit",
                                         )
                                     with Vertical(classes="field compact"):
-                                        yield Label("Verify limit (0 = all)", classes="field-label")
+                                        yield Label("Verify limit", classes="field-label")
                                         yield Input(
                                             value=str(self.initial_config.max_verify),
                                             id="inp-max-verify", type="integer",
+                                            tooltip="0 means verify every gathered link",
                                         )
                                     with Vertical(classes="field compact"):
                                         yield Label("Crawl workers", classes="field-label")
@@ -396,6 +662,11 @@ class DLFApp(App):
                             with Vertical(classes="panel spark-panel"):
                                 yield Static("PAGE THROUGHPUT", classes="panel-title")
                                 yield Sparkline([], id="spark-pages")
+                                yield Static(
+                                    "Throughput trend needs more samples.",
+                                    id="spark-note",
+                                    classes="spark-note",
+                                )
                                 yield Static(id="throughput-label", classes="progress-label")
                         with Horizontal(classes="panels-row recent-row"):
                             with Vertical(classes="panel recent-panel"):
@@ -479,6 +750,19 @@ class DLFApp(App):
                             yield Button("Open log file", id="log-open")
                         yield RichLog(id="logs", wrap=True, highlight=False, markup=False,
                                       max_lines=5000)
+                    with Vertical(id="view-live", classes="view"):
+                        with Horizontal(classes="toolbar live-toolbar"):
+                            yield Static("LIVE FIND FEED", classes="panel-title")
+                            yield Static("LIVE  0 shown", id="live-count", classes="page-label")
+                            yield Button("Pause feed", id="live-pause", classes="mini-btn")
+                            yield Button("Clear feed", id="live-clear", classes="mini-btn")
+                            yield Button("Open logs", id="live-logs", classes="mini-btn")
+                        with VerticalScroll(id="live-feed", classes="live-feed"):
+                            yield Static(
+                                "Waiting for matching links...",
+                                id="live-empty",
+                                classes="live-empty",
+                            )
                     with VerticalScroll(id="view-settings", classes="view"):
                         with Vertical(classes="settings-panel"):
                             yield Static("APPEARANCE", classes="panel-title")
@@ -556,6 +840,22 @@ class DLFApp(App):
         self._switch_view("home", animate=False)
         self._update_topbar()
         self._update_footer()
+        self._apply_responsive_layout(self.size.width)
+        try:
+            self.query_one("#spark-pages", Sparkline).display = False
+            self.query_one("#spark-note", Static).display = True
+        except NoMatches:
+            pass
+
+    def _apply_responsive_layout(self, width: int) -> None:
+        compact = width < 145
+        for panel in self.query(".detail-panel"):
+            panel.display = not compact
+        for bar in self.query(".host-bar"):
+            bar.display = not compact
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._apply_responsive_layout(event.size.width)
 
     def _apply_theme(self, name: str) -> None:
         self.theme = name
@@ -593,31 +893,52 @@ class DLFApp(App):
 
     def _build_tables(self) -> None:
         urls = self.query_one("#urls-table", DataTable)
-        urls.add_column("#", key="idx", width=4)
-        urls.add_column("Page URL", key="url", width=64)
-        urls.add_column("Source", key="source", width=9)
-        urls.add_column("Gathered", key="gathered", width=9)
-        urls.add_column("Scan", key="status", width=10)
-        urls.add_column("HTTP", key="http", width=6)
-        urls.add_column("Links", key="links", width=6)
-        urls.add_column("Time", key="time", width=8)
+        urls.add_column("Page URL", key="url", width=38)
+        urls.add_column("Source", key="source", width=7)
+        urls.add_column("Scan", key="status", width=9)
+        urls.add_column("HTTP", key="http", width=5)
+        urls.add_column("Links", key="links", width=5)
+        urls.add_column("Time", key="time", width=6)
         links = self.query_one("#links-table", DataTable)
-        links.add_column("#", key="idx", width=4)
-        links.add_column("Host", key="host", width=34)
-        links.add_column("File", key="file", width=44)
-        links.add_column("Verify", key="status", width=10)
-        links.add_column("HTTP", key="http", width=6)
-        links.add_column("Size", key="size", width=9)
-        links.add_column("Final host", key="final", width=32)
+        links.add_column("Host", key="host", width=22)
+        links.add_column("File", key="file", width=32)
+        links.add_column("Verify", key="status", width=9)
+        links.add_column("HTTP", key="http", width=5)
+        links.add_column("Size", key="size", width=8)
         recent = self.query_one("#recent-table", DataTable)
         recent.add_column("Host", key="host", width=20)
         recent.add_column("File", key="file", width=24)
         recent.add_column("State", key="state", width=9)
 
+    def _extension_label(self) -> str:
+        if not self._extensions:
+            return "Any file type"
+        if len(self._extensions) == 1:
+            return f".{self._extensions[0]}"
+        return f"{len(self._extensions)} types"
+
+    def _update_extension_summary(self) -> None:
+        try:
+            button = self.query_one("#btn-extensions", Button)
+            button.label = self._extension_label()
+            summary = self.query_one("#ext-summary", Static)
+            summary.update(
+                "Any file type" if not self._extensions else
+                ", ".join(f".{ext}" for ext in self._extensions[:4])
+                + (f" +{len(self._extensions) - 4}" if len(self._extensions) > 4 else "")
+            )
+        except NoMatches:
+            pass
+
     def _update_home(self) -> None:
         cfg = self.initial_config
         self.query_one("#inp-url", Input).value = cfg.start_url
-        self.query_one("#inp-patterns", Input).value = ", ".join(cfg.patterns)
+        try:
+            self.query_one("#patterns-editor", PatternChipEditor).set_patterns(cfg.patterns)
+        except NoMatches:
+            pass
+        self.query_one("#sel-match-mode", Select).value = self._match_mode
+        self._update_extension_summary()
         self.query_one("#inp-max-pages", Input).value = str(cfg.max_pages)
         self.query_one("#inp-max-verify", Input).value = str(cfg.max_verify)
         self.query_one("#inp-workers", Input).value = str(cfg.crawl_workers)
@@ -684,6 +1005,8 @@ class DLFApp(App):
             self._refresh_links(force=True)
         elif name == "logs":
             self._rebuild_logs()
+        elif name == "live":
+            self._seed_live()
         elif name == "settings":
             self.query_one("#settings-hint", Static).update(
                 "Advanced values are saved to config.json and applied to new runs."
@@ -703,6 +1026,9 @@ class DLFApp(App):
 
     def action_view_logs(self) -> None:
         self._switch_view("logs")
+
+    def action_view_live(self) -> None:
+        self._switch_view("live")
 
     def action_view_settings(self) -> None:
         self._switch_view("settings")
@@ -729,11 +1055,11 @@ class DLFApp(App):
 
     def _config_from_inputs(self) -> Config:
         url = self.query_one("#inp-url", Input).value.strip()
-        patterns = [part.strip() for part in self.query_one("#inp-patterns", Input).value.split(",")
-                    if part.strip()]
+        patterns = self.query_one("#patterns-editor", PatternChipEditor).patterns()
+        match_mode = str(self.query_one("#sel-match-mode", Select).value or "both")
         if not url.startswith(("http://", "https://")):
             raise ValueError("Site URL must start with http:// or https://")
-        if not patterns:
+        if not patterns and match_mode != "extensions":
             raise ValueError("Add at least one match pattern")
         def as_int(widget_id: str, default: int) -> int:
             raw = self.query_one(widget_id, Input).value.strip()
@@ -747,6 +1073,8 @@ class DLFApp(App):
         return Config(
             start_url=url,
             patterns=patterns,
+            extensions=list(self._extensions),
+            match_mode=match_mode,
             max_pages=max(0, as_int("#inp-max-pages", 0)),
             max_verify=max(0, as_int("#inp-max-verify", 0)),
             verify_mode=str(mode),
@@ -783,9 +1111,12 @@ class DLFApp(App):
             return
         if self.engine is not None:
             self.engine.close()
+        patterns = self.query_one("#patterns-editor", PatternChipEditor).patterns()
         config = Config(
             start_url="https://demo.local/",
-            patterns=["*.abrtech.top"],
+            patterns=patterns or ["*.abrtech.top"],
+            extensions=list(self._extensions),
+            match_mode=self._match_mode,
             demo=True,
             demo_pages=800,
             demo_links_per_page=7,
@@ -841,6 +1172,16 @@ class DLFApp(App):
         self._stats_snapshot = {}
         self._run_notified = False
         self._rate_history.clear()
+        self._spark_ready = False
+        try:
+            self.query_one("#spark-pages", Sparkline).data = []
+            self.query_one("#spark-pages", Sparkline).display = False
+            self.query_one("#spark-note", Static).display = True
+        except NoMatches:
+            pass
+        self._last_link_event_seq = 0
+        self._live_seeded = False
+        self._clear_live()
         for table_id in ("#urls-table", "#links-table", "#recent-table"):
             self.query_one(table_id, DataTable).clear()
         self.query_one("#url-detail-body", Static).update("Select a page row")
@@ -882,7 +1223,13 @@ class DLFApp(App):
             self._last_rate_sample = now
             self._rate_history.append(stats.get("page_rate", 0.0))
             try:
-                self.query_one("#spark-pages", Sparkline).data = list(self._rate_history)
+                history = [0.0] * (60 - len(self._rate_history)) + list(self._rate_history)
+                self.query_one("#spark-pages", Sparkline).data = history
+                ready = sum(1 for value in history if value > 0) >= 2
+                if ready != self._spark_ready:
+                    self._spark_ready = ready
+                    self.query_one("#spark-pages", Sparkline).display = ready
+                    self.query_one("#spark-note", Static).display = not ready
             except Exception:
                 pass
             self.query_one("#throughput-label", Static).update(
@@ -892,6 +1239,9 @@ class DLFApp(App):
             self._refresh_urls()
         if self._view == "links" and now - self._last_link_refresh > 0.7:
             self._refresh_links()
+        if self._view == "live" and now - self._last_live_refresh > 0.15:
+            self._last_live_refresh = now
+            self._refresh_live()
         if now - self._last_recent_refresh > 1.2:
             self._last_recent_refresh = now
             self._refresh_recent()
@@ -915,24 +1265,31 @@ class DLFApp(App):
         if now - self._last_stats_tick < 0.05:
             return
         self._last_stats_tick = now
+        links_hint = f"{stats['links_pending']:,} pending"
+        if stats.get("links_filtered"):
+            links_hint += f" · {stats['links_filtered']:,} filtered"
         card_values = {
             "pages": (stats["pages_gathered"], f"{stats['pages_pending']:,} remaining"),
             "scanned": (stats["pages_scanned"], f"{stats['pages_failed']:,} failed"),
             "remaining": (stats["pages_pending"], f"{stats['pages_gathered']:,} gathered"),
-            "links": (stats["links_gathered"], f"{stats['links_pending']:,} pending"),
+            "links": (stats["links_gathered"], links_hint),
             "hosts": (stats["hosts"], "unique matching hosts"),
             "verified": (stats["links_verified"], f"of {stats['links_gathered']:,} gathered"),
             "ok": (stats["links_ok"], "confirmed links"),
             "bad": (stats["links_bad"], "blocked / failed"),
         }
+        finished = stats.get("phase") in {"done", "stopped", "error"}
         for key, (target, hint) in card_values.items():
             current = self._display_stats.get(key, 0)
             if current != target:
-                delta = target - current
-                step = int(delta * 0.35)
-                if step == 0:
-                    step = 1 if delta > 0 else -1
-                current += step
+                if finished or self._animations == "none":
+                    current = target
+                else:
+                    delta = target - current
+                    step = int(delta * 0.35)
+                    if step == 0:
+                        step = 1 if delta > 0 else -1
+                    current += step
                 self._display_stats[key] = current
             try:
                 card = self.query_one(f"#stat-{key}", StatCard)
@@ -1019,7 +1376,7 @@ class DLFApp(App):
         palette = self._palette
         stats = stats or self._stats_snapshot
         line = Text()
-        line.append(" F1 Home  F2 Dash  F3 URLs  F4 Links  F5 Logs  F6 Settings  F9 Export  ^Q Quit ",
+        line.append(" F1 Home  F2 Dash  F3 URLs  F4 Links  F5 Logs  F6 Settings  F7 Live  F9 Export  ^Q Quit ",
                     style=palette["muted"])
         if stats:
             line.append("│ ", style=palette["panel"])
@@ -1113,10 +1470,8 @@ class DLFApp(App):
             table.clear()
             for index, row in enumerate(rows):
                 table.add_row(
-                    str(offset + index + 1),
                     Text(row["url"], style=self._palette["secondary"], no_wrap=True, overflow="ellipsis"),
                     row["source"],
-                    Text("✓", style=self._palette["success"]),
                     self._page_status(row),
                     str(row.get("http") or "-"),
                     str(row.get("links_found", 0)),
@@ -1160,13 +1515,11 @@ class DLFApp(App):
             table.clear()
             for index, row in enumerate(rows):
                 table.add_row(
-                    str(offset + index + 1),
                     Text(row["host"], style=self._palette["secondary"], no_wrap=True, overflow="ellipsis"),
                     Text(row["filename"], style=self._palette["text"], no_wrap=True, overflow="ellipsis"),
                     self._link_status(row),
                     str(row.get("http") or "-"),
                     self._size_text(row),
-                    Text(row.get("final_host") or "-", style=self._palette["muted"]),
                     key=row["url"],
                 )
             self._link_table_keys = keys
@@ -1176,8 +1529,6 @@ class DLFApp(App):
                     table.update_cell(row["url"], "status", self._link_status(row))
                     table.update_cell(row["url"], "http", str(row.get("http") or "-"))
                     table.update_cell(row["url"], "size", self._size_text(row))
-                    table.update_cell(row["url"], "final", Text(row.get("final_host") or "-",
-                                                                style=self._palette["muted"]))
                 except Exception:
                     pass
         pages = max(1, math.ceil(total / self._page_size))
@@ -1282,6 +1633,94 @@ class DLFApp(App):
                 f"{item['count']} · {item['host'][:24]}",
                 id=f"host-chip-{index}", classes=classes,
             ))
+
+    def _update_live_count(self) -> None:
+        try:
+            label = self.query_one("#live-count", Static)
+            suffix = "  PAUSED" if self._live_paused else ""
+            label.update(f"LIVE  {len(self._live_cards):,} shown{suffix}")
+        except NoMatches:
+            pass
+
+    def _clear_live(self) -> None:
+        self._live_cards.clear()
+        try:
+            feed = self.query_one("#live-feed", VerticalScroll)
+            feed.remove_children()
+            self._live_empty_seq += 1
+            feed.mount(Static(
+                "Waiting for matching links...",
+                id=f"live-empty-{self._live_empty_seq}",
+                classes="live-empty",
+            ))
+        except NoMatches:
+            pass
+        self._update_live_count()
+
+    def _seed_live(self) -> None:
+        if self.engine is None:
+            return
+        self._clear_live()
+        feed = self.query_one("#live-feed", VerticalScroll)
+        recent = list(reversed(self.engine.recent_links(30)))
+        for index, item in enumerate(recent):
+            event = {
+                "seq": -(index + 1),
+                "kind": "found",
+                "url": item.get("url", ""),
+                "host": item.get("host", ""),
+                "filename": item.get("filename", ""),
+                "extension": item.get("extension", ""),
+                "status": item.get("status", "gathered"),
+                "http": item.get("http"),
+                "error": item.get("error", ""),
+                "time": item.get("time", ""),
+            }
+            card = LiveFindCard(event, animate=False)
+            feed.mount(card)
+            self._live_cards[event["url"]] = card
+        for empty in feed.query(".live-empty"):
+            empty.remove()
+        self._last_link_event_seq = self.engine.link_event_seq
+        self._live_seeded = True
+        self._update_live_count()
+        if recent and self._animations != "none":
+            self.call_after_refresh(lambda: feed.scroll_end(animate=False))
+
+    def _ingest_live_events(self, events: list[dict]) -> None:
+        if not events:
+            return
+        feed = self.query_one("#live-feed", VerticalScroll)
+        for empty in feed.query(".live-empty"):
+            empty.remove()
+        animate = self._animations != "none"
+        for event in events:
+            url = str(event.get("url") or "")
+            if not url:
+                continue
+            card = self._live_cards.get(url)
+            if card is None:
+                card = LiveFindCard(event, animate=animate)
+                feed.mount(card)
+                self._live_cards[url] = card
+            else:
+                card.update_event(event, animate=animate)
+            self._last_link_event_seq = max(self._last_link_event_seq, int(event["seq"]))
+        while len(self._live_cards) > 80:
+            oldest_url = next(iter(self._live_cards))
+            oldest = self._live_cards.pop(oldest_url)
+            try:
+                oldest.remove()
+            except Exception:
+                pass
+        self._update_live_count()
+        if animate:
+            self.call_after_refresh(lambda: feed.scroll_end(animate=True))
+
+    def _refresh_live(self) -> None:
+        if self.engine is None or self._view != "live" or self._live_paused:
+            return
+        self._ingest_live_events(self.engine.link_events_since(self._last_link_event_seq))
 
     def _log_matches(self, entry: dict) -> bool:
         level = str(self.query_one("#log-level", Select).value or "all")
@@ -1392,6 +1831,24 @@ class DLFApp(App):
             self.push_screen(HelpScreen())
         elif button_id == "help-close":
             self.pop_screen()
+        elif button_id == "btn-extensions":
+            self.push_screen(ExtensionScreen(self._extensions), self._extensions_selected)
+        elif button_id == "live-pause":
+            self._live_paused = not self._live_paused
+            event.button.label = "Resume feed" if self._live_paused else "Pause feed"
+            self._update_live_count()
+        elif button_id == "live-clear":
+            self._clear_live()
+            if self.engine is not None:
+                self._last_link_event_seq = self.engine.link_event_seq
+        elif button_id == "live-logs":
+            self._switch_view("logs")
+
+    def _extensions_selected(self, selected: list[str] | None) -> None:
+        if selected is None:
+            return
+        self._extensions = normalize_extensions(selected)
+        self._update_extension_summary()
 
     def _apply_host_chip(self, button_id: str) -> None:
         if self.engine is None:
@@ -1470,9 +1927,13 @@ class DLFApp(App):
         self._palette = PALETTES.get(theme_name, PALETTES["neon-lime"])
         self._apply_theme(theme_name)
         base = self.initial_config
+        patterns = self.query_one("#patterns-editor", PatternChipEditor).patterns()
+        match_mode = str(self.query_one("#sel-match-mode", Select).value or "both")
         config = Config(
             start_url=self.query_one("#inp-url", Input).value.strip() or base.start_url,
-            patterns=[part.strip() for part in self.query_one("#inp-patterns", Input).value.split(",") if part.strip()] or base.patterns,
+            patterns=patterns or base.patterns,
+            extensions=list(self._extensions),
+            match_mode=match_mode,
             max_pages=self._int_field("#inp-max-pages", 0),
             max_verify=self._int_field("#inp-max-verify", 0),
             verify_mode=str(self.query_one("#sel-verify-mode", Select).value or "all"),
@@ -1488,6 +1949,8 @@ class DLFApp(App):
             timeout=self._float_field("#inp-timeout", 20.0, minimum=1.0),
             retries=self._int_field("#inp-retries", 2),
         )
+        self._match_mode = match_mode
+        self._extensions = list(config.extensions)
         payload = config.to_dict()
         payload["ui"] = {
             "theme": theme_name,

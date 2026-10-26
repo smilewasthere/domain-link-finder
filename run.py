@@ -8,7 +8,8 @@ from pathlib import Path
 
 from rich.console import Console
 
-from dlf.engine import Config, Engine
+from dlf import __version__
+from dlf.engine import Config, Engine, normalize_extensions
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / "config.json"
@@ -33,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-u", "--url", help="Site URL to crawl")
     parser.add_argument("-m", "--match", action="append", metavar="PATTERN",
                         help="Host or URL glob, or re:REGEX (repeatable)")
+    parser.add_argument("-e", "--ext", action="append", metavar="EXT",
+                        help="File extension to match, such as mkv or .zip (repeatable)")
+    parser.add_argument("--match-mode", choices=("patterns", "both", "extensions"),
+                        help="Match by patterns, patterns plus file types, or file types only")
     parser.add_argument("--seed", action="append", metavar="URL",
                         help="Extra page to scan (repeatable)")
     parser.add_argument("--max-pages", type=int, help="Maximum pages to scan (0 = all)")
@@ -56,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-start", action="store_true",
                         help="Start crawling as soon as the TUI opens")
     parser.add_argument("--list-runs", action="store_true", help="List saved runs and exit")
-    parser.add_argument("--version", action="version", version="domain-link-finder 1.0")
+    parser.add_argument("--version", action="version", version=f"domain-link-finder {__version__}")
     return parser
 
 
@@ -65,6 +70,10 @@ def apply_overrides(config: Config, args: argparse.Namespace) -> Config:
         config.start_url = args.url
     if args.match:
         config.patterns = list(args.match)
+    if args.ext:
+        config.extensions = normalize_extensions(args.ext)
+    if args.match_mode:
+        config.match_mode = args.match_mode
     if args.seed:
         config.extra_seeds = list(dict.fromkeys([*config.extra_seeds, *args.seed]))
     if args.max_pages is not None:

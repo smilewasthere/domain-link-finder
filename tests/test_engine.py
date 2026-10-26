@@ -8,7 +8,10 @@ from dlf.engine import (
     Engine,
     compile_patterns,
     extract_urls,
+    extension_from_url,
+    extension_matches,
     match_pattern,
+    normalize_extensions,
     parse_sitemap_xml,
 )
 
@@ -20,6 +23,20 @@ def test_pattern_matching() -> None:
     assert match_pattern("https://cdn.example.com/files/a.mkv", patterns).startswith("https://cdn")
     assert match_pattern("https://other.example.com/film-12.mkv", patterns) == "re:film-\\d+"
     assert match_pattern("https://other.example.com/nope.mkv", patterns) == ""
+
+
+def test_extension_normalization_and_matching() -> None:
+    assert normalize_extensions([".MKV", "zip, .Rar", "mkv", " tar.gz "]) == [
+        "mkv", "zip", "rar", "tar.gz",
+    ]
+    assert extension_from_url("https://host.example/Film/Movie.1080p.MKV?token=1") == "mkv"
+    assert extension_from_url("https://host.example/Film/archive.tar.gz") == "gz"
+    assert extension_from_url("https://host.example/Film/archive.tar.gz", ["tar.gz"]) == "tar.gz"
+    assert extension_from_url("https://host.example/no-extension") == ""
+    assert extension_matches("https://host.example/Film/Movie.1080p.MKV?token=1", ["mkv"])
+    assert extension_matches("https://host.example/Film/archive.tar.gz", ["tar.gz"])
+    assert extension_matches("https://host.example/Film/no-extension", ["mkv"]) is False
+    assert extension_matches("https://host.example/Film/no-extension", []) is True
 
 
 def test_parse_sitemap_index_and_urlset() -> None:
@@ -43,7 +60,6 @@ def test_parse_sitemap_index_and_urlset() -> None:
     kind, locations = parse_sitemap_xml(urlset)
     assert kind == "urlset"
     assert locations == ["https://example.com/a/", "https://example.com/b/"]
-
     assert parse_sitemap_xml(b"not xml") == ("", [])
 
 
@@ -97,8 +113,79 @@ def test_demo_run_persists_and_exports(tmp_path) -> None:
     with (engine.output_dir / "links.csv").open(encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert len(rows) == 50
+    assert "extension" in rows[0]
     assert {row["status"] for row in rows} <= {"ok", "blocked", "missing", "error"}
     engine.close()
+
+
+def test_demo_link_events_are_cursor_readable(tmp_path) -> None:
+    engine = Engine(Config(
+        start_url="https://demo.local/",
+        patterns=["*.abrtech.top"],
+        demo=True,
+        demo_pages=2,
+        demo_links_per_page=3,
+        demo_delay=0,
+        output_dir=str(tmp_path / "run_events"),
+    ))
+    link = engine._upsert_link(
+        "https://event.example/file.zip", "https://demo.local/", "Download",
+        "*.abrtech.top", "a", "href",
+    )
+    events = engine.link_events_since(0)
+    assert any(event["kind"] == "found" and event["url"] == link["url"] for event in events)
+    cursor = events[-1]["seq"]
+    assert engine.link_events_since(cursor) == []
+    engine._link_set_status(link, "ok")
+    updated = engine.link_events_since(cursor)
+    assert any(event["kind"] == "status" and event["status"] == "ok" for event in updated)
+    assert any(
+        item["url"] == link["url"] and item["status"] == "ok"
+        for item in engine.recent_links(5)
+    )
+    engine.close()
+
+
+def test_demo_extension_modes(tmp_path) -> None:
+    def run(name: str, **kwargs):
+        engine = Engine(Config(
+            start_url="https://demo.local/",
+            demo=True,
+            demo_pages=6,
+            demo_links_per_page=6,
+            demo_delay=0,
+            output_dir=str(tmp_path / name),
+            **kwargs,
+        ))
+        engine.start()
+        engine.wait(15)
+        rows, _ = engine.link_rows("all", "", "", 0, 1000)
+        engine.close()
+        return rows
+
+    both = run("both", patterns=["*.abrtech.top"], extensions=["zip"], match_mode="both")
+    assert both
+    assert {row["extension"] for row in both} == {"zip"}
+
+    patterns_only = run(
+        "patterns", patterns=["*.abrtech.top"], extensions=["zip"], match_mode="patterns",
+    )
+    assert len(patterns_only) == 36
+    assert {row["extension"] for row in patterns_only} > {"zip"}
+
+    extensions_only = run(
+        "extensions", patterns=["*.nothing.example"], extensions=["mkv"],
+        match_mode="extensions",
+    )
+    assert extensions_only
+    assert {row["extension"] for row in extensions_only} == {"mkv"}
+
+    any_extension = run(
+        "extensions-any", patterns=["*.nothing.example"], extensions=[],
+        match_mode="extensions",
+    )
+    assert any_extension
+    assert len({row["extension"] for row in any_extension}) > 1
 
 
 def test_resume_loads_previous_run(tmp_path) -> None:
@@ -127,10 +214,18 @@ def test_resume_loads_previous_run(tmp_path) -> None:
     assert resumed.links
     assert resumed.page_rows("all", "", 0, 100)[1] == 6
     assert resumed.link_rows("all", "", "", 0, 100)[1] == 18
+    assert all(row["extension"] for row in resumed.link_rows("all", "", "", 0, 100)[0])
 
     state = json.loads((output / "state.json").read_text(encoding="utf-8"))
     assert state["stats"]["links"] == 18
     resumed.close()
+
+
+def test_config_new_filter_fields_roundtrip() -> None:
+    config = Config(extensions=["mkv", "zip"], match_mode="extensions")
+    restored = Config.from_dict(config.to_dict())
+    assert restored.extensions == ["mkv", "zip"]
+    assert restored.match_mode == "extensions"
 
 
 def test_max_verify_marks_extra_links_unverified(tmp_path) -> None:

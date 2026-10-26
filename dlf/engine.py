@@ -29,7 +29,7 @@ urllib3.disable_warnings(InsecureRequestWarning)
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36 DomainLinkFinder/1.0"
+    "Chrome/131.0.0.0 Safari/537.36 DomainLinkFinder/1.1"
 )
 
 FINAL_LINK_STATES = {"ok", "blocked", "missing", "failed", "error"}
@@ -115,10 +115,65 @@ def filename_from_url(url: str) -> str:
     return unquote(path.rsplit("/", 1)[-1]) or ""
 
 
+def normalize_extensions(values: Iterable[str]) -> list[str]:
+    normalized: list[str] = []
+    for raw in values:
+        for part in str(raw).replace("\n", ",").split(","):
+            ext = part.strip().lower()
+            while ext.startswith(("*", ".")):
+                ext = ext[1:]
+            ext = ext.strip().strip(".")
+            if not ext or any(char in ext for char in "/\\?&#"):
+                continue
+            if ext not in normalized:
+                normalized.append(ext)
+    return normalized
+
+
+def extension_from_url(url: str, known: Iterable[str] | None = None) -> str:
+    try:
+        path = unquote(urlparse(url).path or "").rstrip("/")
+    except ValueError:
+        return ""
+    name = path.rsplit("/", 1)[-1].lower()
+    if not name:
+        return ""
+    for ext in sorted(normalize_extensions(known or []), key=len, reverse=True):
+        if name.endswith("." + ext):
+            return ext
+    if "." not in name.strip("."):
+        return ""
+    return name.rsplit(".", 1)[-1]
+
+
+def extension_matches(url: str, extensions: Iterable[str]) -> bool:
+    normalized = normalize_extensions(extensions)
+    if not normalized:
+        return True
+    try:
+        path = unquote(urlparse(url).path or "").rstrip("/").lower()
+    except ValueError:
+        return False
+    return any(path.endswith("." + ext) for ext in normalized)
+
+
+DEMO_EXTENSIONS = ("mkv", "mp4", "zip", "pdf", "apk", "srt")
+DEMO_CONTENT_TYPES = {
+    "mkv": "video/x-matroska",
+    "mp4": "video/mp4",
+    "zip": "application/zip",
+    "pdf": "application/pdf",
+    "apk": "application/vnd.android.package-archive",
+    "srt": "application/x-subrip",
+}
+
+
 @dataclass
 class Config:
     start_url: str = "https://www.meereen.top/"
     patterns: list[str] = field(default_factory=lambda: ["*.abrtech.top"])
+    extensions: list[str] = field(default_factory=list)
+    match_mode: str = "both"
     max_pages: int = 0
     max_verify: int = 0
     verify_mode: str = "all"
@@ -140,6 +195,11 @@ class Config:
     demo_pages: int = 600
     demo_links_per_page: int = 7
     demo_delay: float = 0.02
+
+    def __post_init__(self) -> None:
+        self.extensions = normalize_extensions(self.extensions)
+        if self.match_mode not in {"patterns", "both", "extensions"}:
+            self.match_mode = "both"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -335,6 +395,8 @@ class Engine:
         self._write_lock = threading.Lock()
         self._log_entries: deque[dict] = deque(maxlen=5000)
         self._log_seq = 0
+        self._link_events: deque[dict] = deque(maxlen=12000)
+        self._link_event_seq = 0
         self._recent_links: deque[dict] = deque(maxlen=30)
         self._recent_errors: deque[dict] = deque(maxlen=30)
         self._revision = 0
@@ -359,6 +421,7 @@ class Engine:
         self._links_verified = 0
         self._links_ok = 0
         self._links_bad = 0
+        self._links_filtered = 0
         self._scan_times: deque[float] = deque(maxlen=4000)
         self._verify_times: deque[float] = deque(maxlen=8000)
         self._start_time = now()
@@ -434,6 +497,45 @@ class Engine:
     def logs_all(self) -> list[dict]:
         with self._lock:
             return [dict(entry) for entry in self._log_entries]
+
+    def _emit_link_event(self, kind: str, link: dict) -> None:
+        with self._lock:
+            self._link_event_seq += 1
+            self._link_events.append({
+                "seq": self._link_event_seq,
+                "kind": kind,
+                "url": link.get("url", ""),
+                "host": link.get("host", ""),
+                "filename": link.get("filename", ""),
+                "extension": link.get("extension", ""),
+                "status": link.get("status", ""),
+                "http": link.get("http"),
+                "error": link.get("error", ""),
+                "time": clock(),
+                "updated_at": link.get("updated_at"),
+            })
+
+    def link_events_since(self, seq: int) -> list[dict]:
+        with self._lock:
+            return [dict(event) for event in self._link_events if event["seq"] > seq]
+
+    @property
+    def link_event_seq(self) -> int:
+        with self._lock:
+            return self._link_event_seq
+
+    def _link_accepted(self, url: str, matched: str | None = None) -> bool:
+        mode = self.config.match_mode
+        if mode not in {"patterns", "both", "extensions"}:
+            mode = "both"
+        pattern_match = match_pattern(url, self.patterns) if matched is None else matched
+        type_match = extension_matches(url, self.config.extensions)
+        has_types = bool(self.config.extensions)
+        if mode == "patterns":
+            return bool(pattern_match)
+        if mode == "extensions":
+            return type_match
+        return bool(pattern_match) and (type_match if has_types else True)
 
     @property
     def revision(self) -> int:
@@ -749,6 +851,16 @@ class Engine:
             self._persist_link(link)
         elif status in {"skipped", "unverified"}:
             self._persist_link(link)
+        for item in self._recent_links:
+            if item.get("url") == link["url"]:
+                item.update({
+                    "status": status,
+                    "http": link.get("http"),
+                    "error": link.get("error", ""),
+                    "time": clock(),
+                })
+                break
+        self._emit_link_event("status", link)
         self._revision += 1
 
     def _persist_link(self, link: dict) -> None:
@@ -805,6 +917,7 @@ class Engine:
             "url": url,
             "host": host,
             "filename": filename_from_url(url),
+            "extension": extension_from_url(url, self.config.extensions),
             "source_page": source_page,
             "anchor": anchor,
             "pattern": matched,
@@ -833,8 +946,9 @@ class Engine:
             host_stats["example"] = url
         self._recent_links.appendleft({
             "url": url, "host": host, "filename": link["filename"],
-            "time": clock(), "status": "gathered",
+            "extension": link["extension"], "time": clock(), "status": "gathered",
         })
+        self._emit_link_event("found", link)
         self._revision += 1
         with self._write_lock:
             try:
@@ -1055,16 +1169,24 @@ class Engine:
 
         extracted = extract_urls(text, final_url or url)
         matched_count = 0
+        filtered_count = 0
         new_pages: list[str] = []
+        mode = self.config.match_mode
         for item in extracted:
-            link_host = (urlparse(item.url).hostname or "").lower()
             matched = match_pattern(item.url, self.patterns)
-            if matched:
+            if self._link_accepted(item.url, matched):
+                label = matched
+                if mode == "extensions":
+                    label = f"filetype:{extension_from_url(item.url, self.config.extensions)}"
                 with self._lock:
-                    link = self._upsert_link(item.url, url, item.anchor, matched, item.tag, item.attr)
+                    link = self._upsert_link(item.url, url, item.anchor, label, item.tag, item.attr)
                     if link["status"] == "gathered":
                         self._schedule_verify(link)
                 matched_count += 1
+            elif matched and mode == "both" and self.config.extensions:
+                with self._lock:
+                    self._links_filtered += 1
+                filtered_count += 1
             if self._same_site(item.url) and is_page_url(item.url, self.start_host):
                 with self._lock:
                     exists = item.url in self.pages
@@ -1092,7 +1214,8 @@ class Engine:
             self._page_set_status(page, "scanned")
         self.log(
             "info",
-            f"Scanned {url} [{http_status}] links={matched_count} new_pages={added} {elapsed_ms}ms",
+            f"Scanned {url} [{http_status}] links={matched_count} new_pages={added} "
+            f"filtered={filtered_count} {elapsed_ms}ms",
         )
 
     def _host_semaphore(self, host: str) -> threading.BoundedSemaphore:
@@ -1297,6 +1420,7 @@ class Engine:
                 "links_verified": self._links_verified,
                 "links_ok": self._links_ok,
                 "links_bad": self._links_bad,
+                "links_filtered": self._links_filtered,
                 "links_pending": remaining_links,
                 "hosts": len(self.hosts),
                 "page_rate": page_rate,
@@ -1368,7 +1492,10 @@ class Engine:
                 if host_lower and link["host"] != host_lower:
                     continue
                 if search_lower:
-                    haystack = f"{link['url']} {link['host']} {link['filename']}".lower()
+                    haystack = (
+                        f"{link['url']} {link['host']} {link['filename']} "
+                        f"{link.get('extension', '')}"
+                    ).lower()
                     if search_lower not in haystack:
                         continue
                 total += 1
@@ -1405,7 +1532,8 @@ class Engine:
         with self._lock:
             link_rows = [
                 (
-                    link["host"], link["url"], link["filename"], link["status"],
+                    link["host"], link["url"], link["filename"], link.get("extension", ""),
+                    link["status"],
                     link.get("http"), link.get("final_url", ""), link.get("final_host", ""),
                     link.get("content_type", ""), link.get("size"), human_size(link.get("size")),
                     link.get("ssl_verified"), link["source_page"], link.get("anchor", ""),
@@ -1436,7 +1564,7 @@ class Engine:
             with links_path.open("w", encoding="utf-8-sig", newline="") as handle:
                 writer = csv.writer(handle)
                 writer.writerow([
-                    "host", "url", "filename", "status", "http", "final_url",
+                    "host", "url", "filename", "extension", "status", "http", "final_url",
                     "final_host", "content_type", "size_bytes", "size_human",
                     "ssl_verified", "source_page", "anchor", "matched_pattern",
                     "elapsed_ms", "error",
@@ -1483,6 +1611,7 @@ class Engine:
                     "links": len(self.links),
                     "links_verified": self._links_verified,
                     "links_ok": self._links_ok,
+                    "links_filtered": self._links_filtered,
                     "hosts": len(self.hosts),
                 },
             }
@@ -1545,6 +1674,9 @@ class Engine:
             for link in self.links.values():
                 host = link.get("host") or (urlparse(link["url"]).hostname or "").lower()
                 link["host"] = host
+                link["extension"] = link.get("extension") or extension_from_url(
+                    link["url"], self.config.extensions,
+                )
                 status = link.get("status")
                 if status in FINAL_LINK_STATES or status in {"queued", "verifying"}:
                     self._verify_scheduled += 1
@@ -1561,6 +1693,19 @@ class Engine:
                     else:
                         self._links_bad += 1
                         stats["bad"] = stats.get("bad", 0) + 1
+            self._recent_links.clear()
+            recent = sorted(
+                self.links.values(),
+                key=lambda item: item.get("updated_at") or 0,
+                reverse=True,
+            )
+            for link in recent[:30]:
+                self._recent_links.append({
+                    "url": link["url"], "host": link["host"],
+                    "filename": link["filename"], "extension": link["extension"],
+                    "time": clock(link.get("updated_at")), "status": link.get("status", ""),
+                    "http": link.get("http"), "error": link.get("error", ""),
+                })
         self.log("info", f"Loaded previous run: {len(self.pages)} pages, {len(self.links)} links")
 
     def _run_demo(self) -> None:
@@ -1569,7 +1714,9 @@ class Engine:
         total = max(1, self.config.demo_pages)
         links_per_page = max(1, self.config.demo_links_per_page)
         pattern = self.config.patterns[0].strip() if self.config.patterns else "*.abrtech.top"
-        if pattern.startswith("*."):
+        if self.config.match_mode == "extensions":
+            demo_domain = "demo.example"
+        elif pattern.startswith("*."):
             demo_domain = pattern[2:]
         elif "://" in pattern:
             demo_domain = urlparse(pattern).hostname or "demo.example"
@@ -1585,15 +1732,26 @@ class Engine:
                 page = self._upsert_page(page_url, "fetching", "demo")
             token = f"demo{index:05d}"
             host = f"{token}.{demo_domain}"
+            accepted_count = 0
             for file_index in range(1, links_per_page + 1):
                 quality = ["480p", "720p", "1080p", "2160p"][file_index % 4]
+                extension = DEMO_EXTENSIONS[(index + file_index) % len(DEMO_EXTENSIONS)]
                 link_url = (
                     f"https://{host}/Film/{index}/Movie.{index}."
-                    f"{quality}.Part{file_index:02d}.Demo.DLF.mkv"
+                    f"{quality}.Part{file_index:02d}.Demo.DLF.{extension}"
                 )
+                matched = match_pattern(link_url, self.patterns)
+                if not self._link_accepted(link_url, matched):
+                    if matched and self.config.match_mode == "both" and self.config.extensions:
+                        with self._lock:
+                            self._links_filtered += 1
+                    continue
+                label = matched
+                if self.config.match_mode == "extensions":
+                    label = f"filetype:{extension}"
                 with self._lock:
                     link = self._upsert_link(
-                        link_url, page_url, f"Download {quality}", pattern,
+                        link_url, page_url, f"Download {quality}", label,
                         "a", "href",
                     )
                     roll = (index + file_index) % 100
@@ -1601,7 +1759,7 @@ class Engine:
                         link["http"] = 200
                         link["final_url"] = f"https://cdn{index % 7}.example/{link['filename']}"
                         link["final_host"] = f"cdn{index % 7}.example"
-                        link["content_type"] = "video/x-matroska"
+                        link["content_type"] = DEMO_CONTENT_TYPES.get(extension, "application/octet-stream")
                         link["size"] = 1_200_000_000 + index * 1000
                         link["elapsed_ms"] = 90 + file_index * 7
                         self._link_set_status(link, "ok")
@@ -1616,9 +1774,10 @@ class Engine:
                     else:
                         link["error"] = "connection timed out"
                         self._link_set_status(link, "error")
+                accepted_count += 1
             with self._lock:
                 page["http"] = 200
-                page["links_found"] = links_per_page
+                page["links_found"] = accepted_count
                 page["elapsed_ms"] = 120
                 self._page_set_status(page, "scanned")
             if index % 10 == 0:
